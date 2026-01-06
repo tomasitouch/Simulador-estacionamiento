@@ -93,7 +93,7 @@ class MotorZEAL:
 
 
         distancia_anual = total_viajes * p['km_trip']
-        demand_mwh = (distancia_anual / p['truck_eff']) / 1000
+        demand_mwh = (distancia_anual * p['truck_eff']) / 1000
         
         # 2. Parametros de Inversion (Excel Benchmark Carozzi)
         solar_cost_final = p['sol_base'] * (1 + p['struct_extra']) 
