@@ -1,237 +1,241 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
-import plotly.graph_objects as go
+import plotly.express as px
 
-# --- CONFIGURACIÓN DE LA INTERFAZ ---
-st.set_page_config(
-    page_title="ZEAL 2055 - Terminal de Inteligencia",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# Configuración de la página
+st.set_page_config(page_title="Evaluación ZEAL 2055 - 5 Escenarios", layout="wide", page_icon="⚡")
 
-# --- PALETA DE COLORES Y ESTILO CORPORATIVO ---
-STYLE = {
-    "bg_base": "#0f172a",
-    "bg_card": "linear-gradient(135deg, #1e293b 0%, #0f172a 100%)",
-    "accent_primary": "#38bdf8",
-    "accent_secondary": "#2dd4bf",
-    "text_main": "#f1f5f9",
-    "text_muted": "#94a3b8",
-    "grid_line": "#334155",
-    "danger": "#f43f5e",
-    "font_family": "'Inter', sans-serif"
-}
-
-# --- INYECCIÓN DE CSS PROFESIONAL ---
-st.markdown(f"""
-    <style>
-    .stApp {{
-        background-color: {STYLE['bg_base']};
-        color: {STYLE['text_main']};
-        font-family: {STYLE['font_family']};
-    }}
-    
-    div[data-testid="stMetric"] {{
-        background: {STYLE['bg_card']};
-        border: 1px solid {STYLE['grid_line']};
-        padding: 20px !important;
-        border-radius: 8px;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.3);
-    }}
-    
-    div[data-testid="stMetricValue"] {{
-        background: linear-gradient(to right, {STYLE['accent_primary']}, {STYLE['accent_secondary']});
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        font-weight: 800;
-        font-size: 2rem !important;
-    }}
-
-    section[data-testid="stSidebar"] {{
-        background-color: #111827 !important;
-        border-right: 1px solid {STYLE['grid_line']};
-    }}
-
-    .stTabs [data-baseweb="tab-list"] {{
-        gap: 30px;
-        border-bottom: 1px solid {STYLE['grid_line']};
-    }}
-    
-    .impact-box {{
-        padding: 8px;
-        border-left: 2px solid {STYLE['accent_primary']};
-        background: rgba(56, 189, 248, 0.05);
-        margin-bottom: 12px;
-        font-size: 0.75rem;
-        color: {STYLE['text_muted']};
-    }}
-    </style>
-""", unsafe_allow_html=True)
-
-# --- BACKEND MATEMÁTICO INTEGRAL ---
-class MotorZEAL:
-    @staticmethod
-    def calcular(p):
-        # 1. Calculo de Demanda Logística
-        total_viajes = p['teu'] + (p['ton_frac'] / 30.0)
-        distancia_anual = total_viajes * p['km_trip']
-        # 1.2 kWh/km según reporte
-        demand_mwh = (distancia_anual * p['truck_eff']) / 1000
-        
-        # 2. Parametros de Inversion
-        solar_cost_final = p['sol_base'] * (1 + p['struct_extra']) 
-        ch_cost = p['ch_cost']
-        opex_solar_mwp = p['om_usd_mwp'] / 1e6
-        
-        e_dia = demand_mwh * (1 - p['night_ratio'])
-        e_noche = demand_mwh * p['night_ratio']
-        
-        scenarios_data = []
-
-        # ESCENARIO 5: SOLO RED (Inacción)
-        s5_mw = 0.0
-        s5_capex = ch_cost
-        s5_opex = (demand_mwh * (p['grid_e'] / 1e6)) + (p['contract_mw'] * (p['grid_p'] / 1e6))
-        s5_total = s5_capex + (s5_opex * 30)
-        scenarios_data.append({
-            'Escenario': 'Solo Red (Inacción)',
-            'Total': float(s5_total), 'CAPEX': float(s5_capex), 'MW': float(s5_mw), 'MWh_Bat': 0.0,
-            'LCOE': float((s5_total * 1e6) / (demand_mwh * 30)), 'Color': STYLE['danger']
-        })
-
-        # ESCENARIO 3: SOLAR + RED (Excel)
-        s3_mw = 43.6
-        s3_capex = (s3_mw * solar_cost_final) + ch_cost
-        s3_opex = (s3_mw * opex_solar_mwp) + (e_noche * (p['grid_e'] / 1e6)) + (p['contract_mw'] * (p['grid_p'] / 1e6))
-        s3_total = s3_capex + (s3_opex * 30)
-        scenarios_data.append({
-            'Escenario': 'Solar + Red (Excel)',
-            'Total': float(s3_total), 'CAPEX': float(s3_capex), 'MW': float(s3_mw), 'MWh_Bat': 0.0,
-            'LCOE': float((s3_total * 1e6) / (demand_mwh * 30)), 'Color': STYLE['text_muted']
-        })
-
-        # ESCENARIO 4: HÍBRIDO ESTRATÉGICO (Peak Shaving)
-        e_n_bat = e_noche * 0.5
-        e_n_grid = e_noche * 0.5
-        s4_mw = (e_dia + (e_n_bat / 0.9)) / p['gen_f']
-        s4_bat = (e_n_bat / 365.0) * 1.1 
-        s4_capex = (s4_mw * solar_cost_final) + (s4_bat * (p['bat_kwh']/1000)) + ch_cost
-        s4_opex = (s4_mw * opex_solar_mwp) + (e_n_grid * (p['grid_e'] / 1e6)) + (3.0 * (p['grid_p'] / 1e6))
-        s4_total = s4_capex + (s4_opex * 30)
-        scenarios_data.append({
-            'Escenario': 'Hibrido Óptimo',
-            'Total': float(s4_total), 'CAPEX': float(s4_capex), 'MW': float(s4_mw), 'MWh_Bat': float(s4_bat),
-            'LCOE': float((s4_total * 1e6) / (demand_mwh * 30)), 'Color': STYLE['accent_primary']
-        })
-
-        # ESCENARIO 2: AUTONOMÍA TOTAL (Off-Grid)
-        s2_mw = (e_dia + (e_noche / 0.9)) / p['gen_f']
-        s2_bat = (e_noche / 365.0) * 1.1
-        s2_capex = (s2_mw * solar_cost_final) + (s2_bat * (p['bat_kwh']/1000)) + ch_cost
-        s2_opex = (s2_mw * opex_solar_mwp)
-        s2_total = s2_capex + (s2_opex * 30)
-        scenarios_data.append({
-            'Escenario': 'Autonomía Total',
-            'Total': float(s2_total), 'CAPEX': float(s2_capex), 'MW': float(s2_mw), 'MWh_Bat': float(s2_bat),
-            'LCOE': float((s2_total * 1e6) / (demand_mwh * 30)), 'Color': STYLE['accent_secondary']
-        })
-
-        # Crear DataFrame y asegurar tipos numéricos
-        df = pd.DataFrame(scenarios_data).set_index('Escenario')
-        numeric_cols = ['Total', 'CAPEX', 'MW', 'MWh_Bat', 'LCOE']
-        df[numeric_cols] = df[numeric_cols].apply(pd.to_numeric)
-        
-        df['Area_Ha'] = (df['MW'] * p['area_f']) / 10000
-        return df, demand_mwh
-
-# --- LÓGICA DE INTERFAZ ---
 def main():
-    st.title("TERMINAL DE ESTRATEGIA ENERGETICA ZEAL 2055")
-    st.markdown("SISTEMA DE SOPORTE A DECISIONES BASADO EN METODOLOGÍA NREL/TP-462-5173")
-    st.write("---")
+    st.title("⚡ ZEAL 2055: Simulador Completo (5 Escenarios)")
+    st.markdown("""
+    Comparativa de estrategias de electrificación para tractocamiones:
+    * **I. Solar + Baterías (Off-grid)**: Independencia total.
+    * **II. Solo Red**: Conexión tradicional.
+    * **III. Solar + Red**: Autoconsumo diurno.
+    * **IV. Híbrido 6h**: Solar + Batería para punta tarde + Red noche.
+    * **V. Híbrido 12h**: Solar + Batería extendida + Red madrugada.
+    """)
 
-    with st.sidebar:
-        st.subheader("DATOS LOGÍSTICOS")
-        teu = st.number_input("TEUs Anuales", value=2300000)
-        ton = st.number_input("Toneladas Fraccionadas", value=3400000)
-        truck_eff = st.number_input("Consumo Vehicular (kWh/km)", value=1.2)
-        
-        st.subheader("SOLAR Y ALMACENAMIENTO")
-        sol_base = st.number_input("CAPEX Base (MMUSD/MWp)", value=0.8667)
-        struct_extra = st.slider("Adicional Estructura %", 0, 20, 5) / 100.0
-        bat_kwh = st.slider("CAPEX Batería (USD/kWh)", 50, 300, 101)
-        
-        st.subheader("MERCADO Y OPEX")
-        grid_e = st.number_input("Precio Energía (USD/MWh)", value=65.0)
-        grid_p = st.number_input("Precio Potencia (USD/MW-año)", value=120000.0)
-        night_r = st.slider("Consumo Nocturno %", 0, 100, 65) / 100.0
+    # --- BARRA LATERAL: INPUTS ---
+    st.sidebar.header("1. Datos Operativos")
+    
+    col1, col2 = st.sidebar.columns(2)
+    with col1:
+        carga_teu = st.number_input("Carga TEU/año", value=2300000)
+        carga_fracc = st.number_input("Carga Fracc. (ton)", value=3400000)
+        distancia_km = st.number_input("Distancia Viaje (km)", value=22.0)
+    with col2:
+        factor_teu_ton = st.number_input("Factor Ton/TEU", value=10.0)
+        rendimiento = st.number_input("Rendimiento (kWh/km)", value=1.2)
+        # Calculamos viajes implícitos para cuadrar con el Excel
+        # Si tienes el dato exacto de viajes, mejor, pero lo derivamos de la carga
+        carga_por_viaje = st.number_input("Carga/Viaje (ton)", value=30.0)
 
-    p = {
-        'teu': teu, 'ton_frac': ton, 'truck_eff': truck_eff, 'km_trip': 22,
-        'sol_base': sol_base, 'struct_extra': struct_extra, 'bat_kwh': bat_kwh,
-        'gen_f': 1314.0, 'area_f': 4333.3, 'grid_e': grid_e, 'grid_p': grid_p,
-        'contract_mw': 8.0, 'night_ratio': night_r, 'ch_cost': 4.0, 'om_usd_mwp': 20000.0
+    st.sidebar.header("2. Costos e Inversión")
+    inv_paneles = st.number_input("Capex Paneles (MMUSD/MWp)", value=0.9135, format="%.4f")
+    precio_sis_carga = st.number_input("Capex Cargadores (MMUSD/MWp)", value=1.0)
+    
+    st.sidebar.subheader("Precios Energía 2055")
+    precio_energia = st.number_input("Energía Red (USD/MWh)", value=65.0)
+    precio_potencia = st.number_input("Potencia Red (kUSD/MW-año)", value=120.0)
+    precio_bat_capex = st.number_input("Baterías Capex (kUSD/MWh)", value=101.0)
+
+    st.sidebar.subheader("Parámetros Técnicos")
+    horas_sol = st.number_input("Horas Sol Pico/día", value=3.6)
+    rendimiento_solar = st.number_input("Rendimiento (MWh/MWp)", value=1314.0)
+    factor_area = st.number_input("Uso Suelo (m²/MWp)", value=4333.0)
+
+    # --- CÁLCULOS BASE ---
+    total_carga = (carga_teu * factor_teu_ton) + carga_fracc
+    num_viajes = total_carga / carga_por_viaje
+    km_anuales = num_viajes * distancia_km
+    
+    energia_anual_mwh = (km_anuales * rendimiento) / 1000
+    potencia_media_mw = energia_anual_mwh / 8760
+    # Potencia contratada a la red (con factor de seguridad del Excel ~1.2)
+    potencia_red_mw = potencia_media_mw * 1.2
+
+    # Variables de vida útil
+    anios_eval = 30
+    vida_bateria = 15
+    factor_repo_bat = anios_eval / vida_bateria # 2.0
+    
+    # OPEX estimados (según Excel)
+    opex_paneles_mmusd_mw = 20000 / 1e6 # 20 kUSD/MW
+    opex_bat_mmusd_mwh = 10000 / 1e6   # 10 kUSD/MWh (approx 10 USD/kWh)
+
+    escenarios = []
+
+    # ==========================================
+    # LÓGICA DE LOS 5 ESCENARIOS
+    # ==========================================
+
+    # 1. ESCENARIO I: OFF-GRID TOTAL
+    # Solar cubre todo. Batería cubre las horas sin sol (24 - 3.6 = 20.4h)
+    e1_bat_cap_mwh = potencia_media_mw * (24 - horas_sol)
+    # Paneles deben generar la energía anual completa
+    e1_panel_mwp = energia_anual_mwh / rendimiento_solar 
+    
+    costo_e1 = {
+        "capex_panel": e1_panel_mwp * inv_paneles,
+        "capex_bat": e1_bat_cap_mwh * (precio_bat_capex/1000) * factor_repo_bat,
+        "capex_carga": potencia_media_mw * precio_sis_carga,
+        "opex_panel": e1_panel_mwp * opex_paneles_mmusd_mw * anios_eval,
+        "opex_bat": e1_bat_cap_mwh * opex_bat_mmusd_mwh * anios_eval,
+        "costo_red_pot": 0,
+        "costo_red_ene": 0
     }
     
-    df, demanda = MotorZEAL.calcular(p)
-    ahorro = df.loc['Solo Red (Inacción)', 'Total'] - df.loc['Hibrido Óptimo', 'Total']
+    # 2. ESCENARIO II: SOLO RED
+    costo_e2 = {
+        "capex_panel": 0,
+        "capex_bat": 0,
+        "capex_carga": potencia_media_mw * precio_sis_carga,
+        "opex_panel": 0,
+        "opex_bat": 0,
+        "costo_red_pot": potencia_red_mw * (precio_potencia/1000) * anios_eval,
+        "costo_red_ene": energia_anual_mwh * precio_energia * anios_eval / 1e6
+    }
 
-    c = st.columns(4)
-    c[0].metric("DEMANDA CALCULADA", f"{demanda/1000:,.1f} GWh")
-    c[1].metric("AHORRO VS INACCIÓN", f"${ahorro:,.1f} M")
-    c[2].metric("LCOE ÓPTIMO", f"${df['LCOE'].min():,.2f}")
-    c[3].metric("TERRENO HÍBRIDO", f"{df.loc['Hibrido Óptimo','Area_Ha']:,.1f} Ha")
+    # 3. ESCENARIO III: SOLAR + RED (Sin Baterías)
+    # Solar cubre consumo directo durante horas de sol.
+    e3_panel_mwp = potencia_media_mw # Dimensionado solo para consumo instantáneo
+    e3_gen_solar = e3_panel_mwp * rendimiento_solar # Total generado = Total autoconsumido
+    e3_red_ene = energia_anual_mwh - e3_gen_solar
+    
+    costo_e3 = {
+        "capex_panel": e3_panel_mwp * inv_paneles,
+        "capex_bat": 0,
+        "capex_carga": potencia_media_mw * precio_sis_carga,
+        "opex_panel": e3_panel_mwp * opex_paneles_mmusd_mw * anios_eval,
+        "opex_bat": 0,
+        "costo_red_pot": potencia_red_mw * (precio_potencia/1000) * anios_eval,
+        "costo_red_ene": e3_red_ene * precio_energia * anios_eval / 1e6
+    }
 
-    st.write("###")
+    # 4. ESCENARIO IV: HÍBRIDO (6 Horas Batería)
+    # Batería dimensionada para 6 horas
+    e4_bat_cap_mwh = potencia_media_mw * 6
+    # Paneles deben cubrir consumo directo (3.6h) + Cargar Batería (en esas 3.6h)
+    # Potencia carga bat = Capacidad / Horas Sol
+    e4_panel_bat_mw = e4_bat_cap_mwh / horas_sol
+    e4_panel_total_mwp = potencia_media_mw + e4_panel_bat_mw
+    
+    # Energía: Solar Directo + Solar via Bat
+    e4_solar_directo = potencia_media_mw * horas_sol * 365
+    e4_solar_bat = e4_bat_cap_mwh * 365
+    e4_total_solar = e4_solar_directo + e4_solar_bat
+    e4_red_ene = energia_anual_mwh - e4_total_solar
 
-    tab1, tab2 = st.tabs(["COMPARATIVA FINANCIERA", "SENSIBILIDAD DE MERCADO"])
+    costo_e4 = {
+        "capex_panel": e4_panel_total_mwp * inv_paneles,
+        "capex_bat": e4_bat_cap_mwh * (precio_bat_capex/1000) * factor_repo_bat,
+        "capex_carga": potencia_media_mw * precio_sis_carga,
+        "opex_panel": e4_panel_total_mwp * opex_paneles_mmusd_mw * anios_eval,
+        "opex_bat": e4_bat_cap_mwh * opex_bat_mmusd_mwh * anios_eval,
+        "costo_red_pot": potencia_red_mw * (precio_potencia/1000) * anios_eval, # Paga potencia igual
+        "costo_red_ene": e4_red_ene * precio_energia * anios_eval / 1e6
+    }
 
+    # 5. ESCENARIO V: HÍBRIDO (12 Horas Batería)
+    e5_bat_cap_mwh = potencia_media_mw * 12
+    e5_panel_bat_mw = e5_bat_cap_mwh / horas_sol
+    e5_panel_total_mwp = potencia_media_mw + e5_panel_bat_mw
+    
+    e5_solar_directo = potencia_media_mw * horas_sol * 365
+    e5_solar_bat = e5_bat_cap_mwh * 365
+    e5_total_solar = e5_solar_directo + e5_solar_bat
+    e5_red_ene = energia_anual_mwh - e5_total_solar
+
+    costo_e5 = {
+        "capex_panel": e5_panel_total_mwp * inv_paneles,
+        "capex_bat": e5_bat_cap_mwh * (precio_bat_capex/1000) * factor_repo_bat,
+        "capex_carga": potencia_media_mw * precio_sis_carga,
+        "opex_panel": e5_panel_total_mwp * opex_paneles_mmusd_mw * anios_eval,
+        "opex_bat": e5_bat_cap_mwh * opex_bat_mmusd_mwh * anios_eval,
+        "costo_red_pot": potencia_red_mw * (precio_potencia/1000) * anios_eval,
+        "costo_red_ene": e5_red_ene * precio_energia * anios_eval / 1e6
+    }
+
+    # --- CONSOLIDACIÓN ---
+    raw_data = [
+        {"Escenario": "I. Solar + Bat (Off-grid)", "Datos": costo_e1, "MWp": e1_panel_mwp, "Bat_MWh": e1_bat_cap_mwh},
+        {"Escenario": "II. Solo Red", "Datos": costo_e2, "MWp": 0, "Bat_MWh": 0},
+        {"Escenario": "III. Solar + Red", "Datos": costo_e3, "MWp": e3_panel_mwp, "Bat_MWh": 0},
+        {"Escenario": "IV. Solar + Bat (6h) + Red", "Datos": costo_e4, "MWp": e4_panel_total_mwp, "Bat_MWh": e4_bat_cap_mwh},
+        {"Escenario": "V. Solar + Bat (12h) + Red", "Datos": costo_e5, "MWp": e5_panel_total_mwp, "Bat_MWh": e5_bat_cap_mwh},
+    ]
+
+    final_rows = []
+    for item in raw_data:
+        d = item["Datos"]
+        capex_total = d["capex_panel"] + d["capex_bat"] + d["capex_carga"]
+        opex_total = d["opex_panel"] + d["opex_bat"] + d["costo_red_pot"] + d["costo_red_ene"]
+        costo_total = capex_total + opex_total
+        
+        final_rows.append({
+            "Escenario": item["Escenario"],
+            "CAPEX (MMUSD)": capex_total,
+            "OPEX (MMUSD)": opex_total,
+            "Costo Total (30 años)": costo_total,
+            "Costo Unitario (USD/MWh)": (costo_total * 1e6) / (energia_anual_mwh * anios_eval),
+            "Paneles (MWp)": item["MWp"],
+            "Área (hectáreas)": (item["MWp"] * factor_area) / 10000,
+            "Baterías (MWh)": item["Bat_MWh"]
+        })
+
+    df = pd.DataFrame(final_rows)
+
+    # --- VISUALIZACIÓN ---
+    
+    # Métricas Globales
+    st.subheader("📊 Resumen Operativo")
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Energía Anual", f"{energia_anual_mwh:,.0f} MWh")
+    k2.metric("Potencia Media", f"{potencia_media_mw:.2f} MW")
+    k3.metric("Flota Estimada", f"{int(num_viajes/(365*10.12))} Tractos")
+    k4.metric("Km Anuales", f"{km_anuales/1e6:.1f} Millones")
+    
+    st.divider()
+
+    # Ganador
+    mejor = df.loc[df["Costo Total (30 años)"].idxmin()]
+    st.success(f"🏆 MEJOR ESCENARIO: **{mejor['Escenario']}** con **{mejor['Costo Total (30 años)']:.2f} MMUSD**")
+
+    # Gráficos
+    tab1, tab2 = st.tabs(["💰 Financiero", "🏗️ Infraestructura"])
+    
     with tab1:
+        st.subheader("Costo Total a 30 Años (CAPEX + OPEX)")
+        fig = px.bar(df, x="Escenario", y=["CAPEX (MMUSD)", "OPEX (MMUSD)"], 
+                     title="Composición de Costos", text_auto=".1f")
+        fig.update_layout(yaxis_title="Millones USD")
+        st.plotly_chart(fig, use_container_width=True)
+        
+    with tab2:
         col_a, col_b = st.columns(2)
         with col_a:
-            # Gráfico 1: Costo Total Ciclo de Vida
-            fig = go.Figure([go.Bar(
-                x=df.index, y=df['Total'],
-                marker_color=df['Color'],
-                text=df['Total'].round(1), textposition='outside',
-                textfont=dict(color=STYLE['text_main'])
-            )])
-            fig.update_layout(title="Costo Total de Propiedad (30 Años) - MMUSD", template="plotly_dark",
-                              paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
-            st.plotly_chart(fig, use_container_width=True)
-
-        with col_b:
-            # Gráfico 2: Desglose Inversión vs Operación
-            df_st = df[['CAPEX', 'Total']].copy()
-            df_st['OPEX_30Y'] = df_st['Total'] - df_st['CAPEX']
-            fig2 = go.Figure()
-            fig2.add_trace(go.Bar(name='Inversión (CAPEX)', x=df_st.index, y=df_st['CAPEX'], marker_color=STYLE['accent_primary']))
-            fig2.add_trace(go.Bar(name='Operación (OPEX 30A)', x=df_st.index, y=df_st['OPEX_30Y'], marker_color=STYLE['grid_line']))
-            fig2.update_layout(barmode='stack', title="Estructura de Capital vs Gasto Operativo", template="plotly_dark",
-                              paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+            st.subheader("Uso de Terreno (Paneles)")
+            fig2 = px.bar(df, x="Escenario", y="Área (hectáreas)", color="Área (hectáreas)",
+                          color_continuous_scale="Reds", text_auto=".1f")
             st.plotly_chart(fig2, use_container_width=True)
+        with col_b:
+            st.subheader("Capacidad de Baterías")
+            fig3 = px.bar(df, x="Escenario", y="Baterías (MWh)", color="Baterías (MWh)",
+                          color_continuous_scale="Blues", text_auto=".1f")
+            st.plotly_chart(fig3, use_container_width=True)
 
-    with tab2:
-        st.write("ANÁLISIS DE RESILIENCIA: HÍBRIDO VS INACCIÓN")
-        x_rango = np.linspace(50, 400, 25)
-        lista_s = []
-        for v in x_rango:
-            p_tmp = p.copy(); p_tmp['bat_kwh'] = v
-            r_tmp, _ = MotorZEAL.calcular(p_tmp)
-            lista_s.append({'Val': v, 'Inacción': r_tmp.loc['Solo Red (Inacción)','Total'], 'Hibrido': r_tmp.loc['Hibrido Óptimo','Total']})
-        
-        df_s = pd.DataFrame(lista_s)
-        fig3 = go.Figure()
-        fig3.add_trace(go.Scatter(x=df_s['Val'], y=df_s['Inacción'], name="Solo Red", line=dict(color=STYLE['danger'], dash='dash')))
-        fig3.add_trace(go.Scatter(x=df_s['Val'], y=df_s['Hibrido'], name="Estrategia Híbrida", line=dict(color=STYLE['accent_primary'], width=4)))
-        fig3.update_layout(template="plotly_dark", paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-                          xaxis_title="Costo Batería (USD/kWh)", yaxis_title="Costo Total 30 Años (MMUSD)")
-        st.plotly_chart(fig3, use_container_width=True)
-
-    with st.expander("REGISTRO DE AUDITORÍA DE DATOS"):
-        df_audit = df.drop(columns=['Color'])
-        st.dataframe(df_audit.style.format("{:,.2f}").background_gradient(cmap='Blues_r'))
+    # Tabla Detalle
+    st.subheader("Matriz Detallada")
+    st.dataframe(df.style.format({
+        "CAPEX (MMUSD)": "{:.2f}",
+        "OPEX (MMUSD)": "{:.2f}",
+        "Costo Total (30 años)": "{:.2f}",
+        "Costo Unitario (USD/MWh)": "{:.2f}",
+        "Paneles (MWp)": "{:.2f}",
+        "Área (hectáreas)": "{:.2f}",
+        "Baterías (MWh)": "{:.2f}"
+    }))
 
 if __name__ == "__main__":
     main()
