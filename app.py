@@ -1,276 +1,106 @@
+import streamlit as st
 import pandas as pd
-import numpy as np
+import plotly.express as px
 
-class ZealSimulator2055:
-    def __init__(self):
-        # --- 1. PARÁMETROS DE ENTRADA (INPUTS) ---
-        # Logística
-        self.C_TEU = 2_300_000      # TEU/año
-        self.C_frac = 3_400_000     # ton/año
-        self.f_TEU = 10.0           # ton/TEU
-        self.C_viaje = 30.0         # ton/viaje
-        self.distancia = 22.0       # km/viaje (ida)
-        self.rendimiento_veh = 1.2  # kWh/km
-        
-        # Solar y Clima
-        self.h_sol = 3.6            # Horas sol pico
-        self.rendimiento_sol = 1314 # MWh/MWp
-        
-        # Costos Unitarios (CAPEX)
-        self.P_paneles = 0.9135     # MMUSD/MWp
-        self.P_bat = 101.0          # USD/kWh (o kUSD/MWh) - Proyección 2050
-        self.P_carga = 1.0          # MMUSD/MWp (Sistema de cargadores)
-        self.P_gen_diesel = 300.0   # USD/kW (Generador industrial)
-        
-        # Costos Unitarios (OPEX)
-        self.opex_paneles_rate = 0.02   # 2% del CAPEX o 20 kUSD/MW-año
-        self.opex_bat_rate = 10.0       # USD/kW-año (CORRECCIÓN NREL: Basado en Potencia)
-        self.opex_gen_maint = 10.0      # USD/kW-año (Standby)
-        
-        # Precios Energía / Combustible
-        self.E_red_price = 65.0         # USD/MWh
-        self.P_red_price = 120.0        # kUSD/MW-año (Potencia contratada)
-        self.diesel_price_ref = 4.09    # USD/gal (Referencia)
-        self.diesel_price_low = 2.11    # USD/gal (Bajo - Escenario Optimizado)
-        
-        # Parámetros Temporales
-        self.T = 30     # Años de evaluación
-        self.V_bat = 15 # Vida útil baterías (años)
-        self.f_repo = self.T / self.V_bat # Factor reposición (2.0)
+# --- CONFIGURACIÓN DE PÁGINA ---
+st.set_page_config(page_title="Sensibilidad ZEAL 2055", layout="wide")
 
-        # Variables calculadas internamente
-        self.E_anual = 0
-        self.P_media = 0
-        
-    def calcular_base_operativa(self):
-        """Calcula la demanda energética base de la flota."""
-        carga_total = (self.C_TEU * self.f_TEU) + self.C_frac
-        n_viajes = carga_total / self.C_viaje
-        km_anuales = n_viajes * self.distancia
-        
-        # Energía Anual (MWh)
-        self.E_anual = (km_anuales * self.rendimiento_veh) / 1000
-        
-        # Potencia Media (MW)
-        self.P_media = self.E_anual / 8760
-        
-        return {
-            "Carga Total (ton)": carga_total,
-            "Viajes/año": n_viajes,
-            "Km/año": km_anuales,
-            "Energía (MWh/año)": self.E_anual,
-            "Potencia Media (MW)": self.P_media
-        }
+st.title("🔋 Simulador de Sensibilidad: ZEAL 2055")
+st.markdown("""
+Esta herramienta evalúa cómo cambia la rentabilidad de los 6 escenarios de electrificación al variar parámetros clave del mercado.  
+*Nota metodológica:* El cálculo del VAN replica la estructura del documento original, aplicando correcciones sobre el CAPEX fotovoltaico del Escenario III.
+""")
 
-    def escenario_1_offgrid(self):
-        """I. Solar + Baterías (Off-grid)"""
-        # Dimensionamiento
-        bat_capacity_mwh = self.P_media * (24 - self.h_sol)
-        solar_capacity_mwp = self.E_anual / self.rendimiento_sol
-        
-        # CAPEX
-        capex_solar = solar_capacity_mwp * self.P_paneles
-        # Batería: Capacidad * Precio * Factor Reposición / 1000 (para MMUSD)
-        capex_bat = bat_capacity_mwh * self.P_bat * self.f_repo / 1000
-        capex_carga = self.P_media * self.P_carga
-        
-        # OPEX
-        opex_solar = solar_capacity_mwp * 0.02 * self.T
-        
-        # CORRECCIÓN CRÍTICA: OPEX Batería basado en POTENCIA (kW)
-        # P_media (MW) * 1000 (kW/MW) * 10 (USD/kW) / 1e6 (MMUSD) * T (años)
-        opex_bat = (self.P_media * 1000) * (self.opex_bat_rate / 1_000_000) * self.T
-        
-        total = capex_solar + capex_bat + capex_carga + opex_solar + opex_bat
-        
-        return {
-            "ID": "I. Off-grid",
-            "CAPEX": capex_solar + capex_bat + capex_carga,
-            "OPEX": opex_solar + opex_bat,
-            "Total MMUSD": total,
-            "LCOE (USD/MWh)": (total * 1e6) / (self.E_anual * self.T)
-        }
+# --- PANEL LATERAL: PARÁMETROS DE SENSIBILIDAD ---
+st.sidebar.header("Parámetros Sensibles")
 
-    def escenario_1b_respaldo(self, precio_diesel_tipo="Bajo"):
-        """I-B. Off-grid + Respaldo Diésel"""
-        # Hereda base del escenario 1
-        base = self.escenario_1_offgrid()
-        
-        # Dimensionamiento Generador
-        potencia_gen_kw = 3000 # 3 MW
-        horas_uso = 360 # 15 días/año
-        
-        # CAPEX Generador
-        capex_gen = (potencia_gen_kw * self.P_gen_diesel) / 1_000_000 # MMUSD
-        
-        # OPEX Generador
-        generacion_gen_mwh = (potencia_gen_kw / 1000) * horas_uso
-        eficiencia_gen = 13.2 # kWh/gal
-        galones = (generacion_gen_mwh * 1000) / eficiencia_gen
-        
-        precio_diesel = self.diesel_price_low if precio_diesel_tipo == "Bajo" else self.diesel_price_ref
-        
-        costo_combustible_anual = galones * precio_diesel
-        costo_mant_anual = potencia_gen_kw * self.opex_gen_maint
-        
-        opex_gen_total = (costo_combustible_anual + costo_mant_anual) * self.T / 1_000_000
-        
-        total = base["Total MMUSD"] + capex_gen + opex_gen_total
-        
-        return {
-            "ID": f"I-B. Respaldo ({precio_diesel_tipo})",
-            "CAPEX": base["CAPEX"] + capex_gen,
-            "OPEX": base["OPEX"] + opex_gen_total,
-            "Total MMUSD": total,
-            "LCOE (USD/MWh)": (total * 1e6) / (self.E_anual * self.T)
-        }
+r_pct = st.sidebar.slider("Tasa de descuento anual (%)", min_value=1.0, max_value=15.0, value=5.0, step=0.5)
+r = r_pct / 100.0
 
-    def escenario_2_red(self):
-        """II. Solo Red"""
-        p_contratada = self.P_media * 1.2
-        
-        capex_carga = self.P_media * self.P_carga
-        
-        costo_potencia = p_contratada * (self.P_red_price / 1000) * self.T
-        costo_energia = self.E_anual * self.E_red_price * (self.T / 1_000_000)
-        
-        total = capex_carga + costo_potencia + costo_energia
-        
-        return {
-            "ID": "II. Solo Red",
-            "CAPEX": capex_carga,
-            "OPEX": costo_potencia + costo_energia, # Todo consumo es OPEX
-            "Total MMUSD": total,
-            "LCOE (USD/MWh)": (total * 1e6) / (self.E_anual * self.T)
-        }
+E_precio = st.sidebar.slider("Precio Energía Red (USD/MWh)", min_value=30.0, max_value=150.0, value=65.0, step=5.0)
 
-    def escenario_3_solar_red(self):
-        """III. Solar + Red (Sin Baterías)"""
-        p_solar = self.P_media # Autoconsumo diurno
-        gen_solar = p_solar * self.rendimiento_sol
-        energia_red = self.E_anual - gen_solar
-        p_contratada = self.P_media * 1.2 # Se paga igual por respaldo
-        
-        # Costos Solares
-        capex_solar = p_solar * self.P_paneles
-        opex_solar = p_solar * 0.02 * self.T
-        capex_carga = self.P_media * self.P_carga
-        
-        # Costos Red
-        costo_potencia = p_contratada * (self.P_red_price / 1000) * self.T
-        costo_energia = energia_red * self.E_red_price * (self.T / 1_000_000)
-        
-        total = capex_solar + capex_carga + opex_solar + costo_potencia + costo_energia
-        
-        return {
-            "ID": "III. Solar + Red",
-            "CAPEX": capex_solar + capex_carga,
-            "OPEX": opex_solar + costo_potencia + costo_energia,
-            "Total MMUSD": total,
-            "LCOE (USD/MWh)": (total * 1e6) / (self.E_anual * self.T)
-        }
+P_pan_precio = st.sidebar.slider("CAPEX Paneles Solares (MMUSD/MWp)", min_value=0.50, max_value=1.50, value=0.9135, step=0.05)
 
-    def escenario_4_hibrido_6h(self):
-        """IV. Híbrido 6h"""
-        # Dimensionamiento
-        bat_mwh = self.P_media * 6
-        p_solar_bat = bat_mwh / self.h_sol
-        p_solar_total = self.P_media + p_solar_bat
-        
-        # Energía
-        gen_solar_directa = self.P_media * self.h_sol * 365
-        gen_via_bat = bat_mwh * 365
-        total_solar = (gen_solar_directa + gen_via_bat) / 1000 # aprox a MWh
-        # Ajuste fino matemático para coincidir con MWh anuales del documento
-        total_solar = 9291 
-        energia_red = self.E_anual - total_solar
-        
-        # Costos
-        capex_solar = p_solar_total * self.P_paneles
-        capex_bat = bat_mwh * self.P_bat * self.f_repo / 1000
-        capex_carga = self.P_media * self.P_carga
-        
-        opex_solar = p_solar_total * 0.02 * self.T
-        # OPEX Bat (CORREGIDO: 10 USD/kW-año sobre potencia instalada)
-        opex_bat = (self.P_media * 1000) * (self.opex_bat_rate / 1_000_000) * self.T
-        
-        costo_potencia = (self.P_media * 1.2) * (self.P_red_price / 1000) * self.T
-        costo_energia = energia_red * self.E_red_price * (self.T / 1_000_000)
-        
-        total = capex_solar + capex_bat + capex_carga + opex_solar + opex_bat + costo_potencia + costo_energia
-        
-        return {
-            "ID": "IV. Híbrido 6h",
-            "CAPEX": capex_solar + capex_bat + capex_carga,
-            "OPEX": opex_solar + opex_bat + costo_potencia + costo_energia,
-            "Total MMUSD": total,
-            "LCOE (USD/MWh)": (total * 1e6) / (self.E_anual * self.T)
-        }
+mult_bat = st.sidebar.slider("Multiplicador Precio Baterías (%)", min_value=30, max_value=200, value=100, step=10) / 100.0
 
-    def escenario_5_hibrido_12h(self):
-        """V. Híbrido 12h"""
-        # Dimensionamiento
-        bat_mwh = self.P_media * 12
-        p_solar_bat = bat_mwh / self.h_sol
-        p_solar_total = self.P_media + p_solar_bat
-        
-        # Energía (Simplificado para coincidir con documento)
-        total_solar = 15098 
-        energia_red = self.E_anual - total_solar
-        
-        # Costos
-        capex_solar = p_solar_total * self.P_paneles
-        capex_bat = bat_mwh * self.P_bat * self.f_repo / 1000
-        capex_carga = self.P_media * self.P_carga
-        
-        opex_solar = p_solar_total * 0.02 * self.T
-        # OPEX Bat (CORREGIDO)
-        opex_bat = (self.P_media * 1000) * (self.opex_bat_rate / 1_000_000) * self.T
-        
-        costo_potencia = (self.P_media * 1.2) * (self.P_red_price / 1000) * self.T
-        costo_energia = energia_red * self.E_red_price * (self.T / 1_000_000)
-        
-        total = capex_solar + capex_bat + capex_carga + opex_solar + opex_bat + costo_potencia + costo_energia
-        
-        return {
-            "ID": "V. Híbrido 12h",
-            "CAPEX": capex_solar + capex_bat + capex_carga,
-            "OPEX": opex_solar + opex_bat + costo_potencia + costo_energia,
-            "Total MMUSD": total,
-            "LCOE (USD/MWh)": (total * 1e6) / (self.E_anual * self.T)
-        }
+st.sidebar.markdown("---")
+P_pot_L = st.sidebar.slider("Precio Potencia Cliente Libre (kUSD/MW-año)", min_value=50.0, max_value=200.0, value=120.0, step=10.0)
+P_pot_R = st.sidebar.slider("Precio Potencia Cliente Regulado (kUSD/MW-año)", min_value=30.0, max_value=150.0, value=60.0, step=10.0)
 
-    def ejecutar_simulacion(self):
-        self.calcular_base_operativa()
-        
-        resultados = []
-        resultados.append(self.escenario_1_offgrid())
-        resultados.append(self.escenario_1b_respaldo("Bajo")) # El ganador
-        resultados.append(self.escenario_1b_respaldo("Ref"))  # Referencia
-        resultados.append(self.escenario_2_red())
-        resultados.append(self.escenario_3_solar_red())
-        resultados.append(self.escenario_4_hibrido_6h())
-        resultados.append(self.escenario_5_hibrido_12h())
-        
-        df = pd.DataFrame(resultados)
-        
-        # Formato visual
-        pd.options.display.float_format = '{:,.2f}'.format
-        print("=== RESULTADOS SIMULACIÓN ZEAL 2055 ===")
-        print(f"Energía Anual Requerida: {self.E_anual:,.2f} MWh")
-        print(f"Potencia Media: {self.P_media:,.2f} MW")
-        print("-" * 60)
-        return df
+# --- CONSTANTES OPERACIONALES ---
+T = 30
+E_anual = 23487
+P_contratada = 3.217
 
-# --- EJECUCIÓN ---
-sim = ZealSimulator2055()
-df_resultados = sim.ejecutar_simulacion()
-print(df_resultados)
+# --- DATOS BASE DE LOS ESCENARIOS ---
+scenarios = [
+    {"name": "I. Solar+BESS 20.4h", "P_pan": 17.875, "C_bat": 54.697, "E_red": 0, "P_bat_kUSD": 70.0, "Pot_price": 0, "Carga_price": 2.988, "OPEX_bat_anual": 0.02681},
+    {"name": "II. Solo Red", "P_pan": 0.0, "C_bat": 0.0, "E_red": 23487, "P_bat_kUSD": 0.0, "Pot_price": P_pot_L, "Carga_price": 3.480, "OPEX_bat_anual": 0.0},
+    {"name": "III. Solar+Red", "P_pan": 2.681, "C_bat": 0.0, "E_red": 19964, "P_bat_kUSD": 0.0, "Pot_price": P_pot_L, "Carga_price": 3.480, "OPEX_bat_anual": 0.0},
+    {"name": "IV. Híbrido 6h", "P_pan": 7.150, "C_bat": 16.087, "E_red": 14092, "P_bat_kUSD": 97.22, "Pot_price": P_pot_L, "Carga_price": 3.480, "OPEX_bat_anual": 0.02681},
+    {"name": "V. Híbrido 12h", "P_pan": 11.619, "C_bat": 32.174, "E_red": 8221, "P_bat_kUSD": 85.88, "Pot_price": P_pot_L, "Carga_price": 3.480, "OPEX_bat_anual": 0.02681},
+    {"name": "VI. Solar+Net Billing Reg.", "P_pan": 17.875, "C_bat": 0.0, "E_red": 19964, "P_bat_kUSD": 0.0, "Pot_price": P_pot_R, "Carga_price": 2.881, "OPEX_bat_anual": 0.0},
+]
 
-# Verificación de Ahorro
-costo_red = df_resultados.loc[df_resultados['ID'] == 'II. Solo Red', 'Total MMUSD'].values[0]
-costo_ganador = df_resultados.loc[df_resultados['ID'] == 'I-B. Respaldo (Bajo)', 'Total MMUSD'].values[0]
-ahorro = costo_red - costo_ganador
+# --- MOTOR DE CÁLCULO ---
+results = []
+# Factor de valor presente para anualidades (PVIFA)
+pvifa = (1 - (1 + r)**-T) / r if r > 0 else T
 
-print("-" * 60)
-print(f"AHORRO FINAL (Escenario I-B Bajo vs Red): {ahorro:,.2f} MMUSD")
+for s in scenarios:
+    # 1. Inversiones (CAPEX)
+    capex_pan = s["P_pan"] * P_pan_precio
+    capex_bat_0 = s["C_bat"] * (s["P_bat_kUSD"] * mult_bat / 1000.0)
+    capex_carga = s["Carga_price"]
+    
+    # El modelo asume un reemplazo de baterías a mitad de vida que se suma nominalmente al CAPEX
+    capex_total_nominal = capex_pan + (capex_bat_0 * 2) + capex_carga 
+
+    # 2. Costos Operacionales Anuales (OPEX)
+    opex_pan_anual = s["P_pan"] * 0.020
+    opex_bat_anual = s["OPEX_bat_anual"] if s["C_bat"] > 0 else 0
+    costo_pot_anual = P_contratada * s["Pot_price"] / 1000.0
+    costo_ene_anual = s["E_red"] * E_precio / 1000000.0
+    
+    opex_total_anual = opex_pan_anual + opex_bat_anual + costo_pot_anual + costo_ene_anual
+    
+    # 3. Cálculo de VAN y LCOE
+    van = capex_total_nominal + opex_total_anual * pvifa
+    lcoe = (van * 1_000_000) / (E_anual * T)
+    
+    results.append({
+        "Escenario": s["name"],
+        "CAPEX (MM$)": round(capex_total_nominal, 2),
+        "OPEX (MM$/año)": round(opex_total_anual, 3),
+        "VAN (MM$)": round(van, 2),
+        "USD/MWh": round(lcoe, 2)
+    })
+
+df = pd.DataFrame(results)
+
+# --- RENDERIZADO UI ---
+winner_row = df.loc[df['VAN (MM$)'].idxmin()]
+
+st.success(f"🏆 **El escenario ganador es:** {winner_row['Escenario']} con un VAN de **{winner_row['VAN (MM$)']} MMUSD**")
+
+# Gráfico de barras interactivo
+fig = px.bar(
+    df, 
+    x='Escenario', 
+    y='VAN (MM$)', 
+    text='VAN (MM$)', 
+    color='VAN (MM$)', 
+    color_continuous_scale='Blues_r',
+    title="Comparación de VAN por Escenario"
+)
+fig.update_traces(textposition='outside')
+fig.update_layout(yaxis_range=[0, df['VAN (MM$)'].max() * 1.15]) # Dar espacio al texto
+st.plotly_chart(fig, use_container_width=True)
+
+# Tabla de datos
+st.subheader("📊 Desglose de Resultados")
+st.dataframe(
+    df.style.highlight_min(subset=['VAN (MM$)', 'USD/MWh'], color='#a8e6cf', axis=0)
+            .format({'CAPEX (MM$)': '{:.2f}', 'OPEX (MM$/año)': '{:.3f}', 'VAN (MM$)': '{:.2f}', 'USD/MWh': '{:.2f}'}),
+    use_container_width=True
+)
