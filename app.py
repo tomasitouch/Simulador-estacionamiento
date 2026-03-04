@@ -8,7 +8,6 @@ st.set_page_config(page_title="Sensibilidad ZEAL 2055", layout="wide")
 st.title(" Simulador de Sensibilidad: ZEAL 2055")
 st.markdown("""
 Esta herramienta evalúa cómo cambia la rentabilidad de los 6 escenarios de electrificación al variar parámetros clave del mercado.  
-*Nota metodológica:* El cálculo del VAN replica la estructura del documento original, aplicando correcciones sobre el CAPEX fotovoltaico del Escenario III.
 """)
 
 # --- PANEL LATERAL: PARÁMETROS DE SENSIBILIDAD ---
