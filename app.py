@@ -5,7 +5,7 @@ import plotly.express as px
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Sensibilidad ZEAL 2055", layout="wide")
 
-st.title("🔋 Simulador de Sensibilidad: ZEAL 2055")
+st.title(" Simulador de Sensibilidad: ZEAL 2055")
 st.markdown("""
 Esta herramienta evalúa cómo cambia la rentabilidad de los 6 escenarios de electrificación al variar parámetros clave del mercado.  
 *Nota metodológica:* El cálculo del VAN replica la estructura del documento original, aplicando correcciones sobre el CAPEX fotovoltaico del Escenario III.
@@ -98,7 +98,7 @@ fig.update_layout(yaxis_range=[0, df['VAN (MM$)'].max() * 1.15]) # Dar espacio a
 st.plotly_chart(fig, use_container_width=True)
 
 # Tabla de datos
-st.subheader("📊 Desglose de Resultados")
+st.subheader("Desglose de Resultados")
 st.dataframe(
     df.style.highlight_min(subset=['VAN (MM$)', 'USD/MWh'], color='#a8e6cf', axis=0)
             .format({'CAPEX (MM$)': '{:.2f}', 'OPEX (MM$/año)': '{:.3f}', 'VAN (MM$)': '{:.2f}', 'USD/MWh': '{:.2f}'}),
